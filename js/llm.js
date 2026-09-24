@@ -94,11 +94,17 @@ export class LLMEngine {
    * Streaming chat completion. `onToken` receives incremental text deltas.
    * Returns the full final message text.
    */
-  async chatStream(messages, { temperature = 0.8, maxTokens = 512, onToken } = {}) {
+  async chatStream(
+    messages,
+    { temperature = 0.8, topP = 0.95, frequencyPenalty = 0, presencePenalty = 0, maxTokens = 512, onToken } = {}
+  ) {
     if (!this.engine) throw new Error("No model loaded yet.");
     const chunks = await this.engine.chat.completions.create({
       messages,
       temperature,
+      top_p: topP,
+      frequency_penalty: frequencyPenalty,
+      presence_penalty: presencePenalty,
       max_tokens: maxTokens,
       stream: true,
     });

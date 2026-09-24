@@ -87,12 +87,31 @@ export function defaultBoard() {
   };
 }
 
+/** Presets used by the beginner-friendly Generation settings UI. */
+export const GENERATION_PRESETS = {
+  precise: { label: "Precise", temperature: 0.3, topP: 0.85, description: "Focused, consistent, sticks closely to facts. Good for Q&A, coding, summarizing." },
+  balanced: { label: "Balanced", temperature: 0.8, topP: 0.95, description: "A sensible default — some variety without going off the rails." },
+  creative: { label: "Creative", temperature: 1.15, topP: 0.98, description: "More surprising, varied wording. Good for brainstorming or creative writing." },
+};
+
+export const MAX_TOKENS_PRESETS = [
+  { value: 150, label: "Short", description: "~1 paragraph" },
+  { value: 512, label: "Medium", description: "A few paragraphs" },
+  { value: 1024, label: "Long", description: "Several paragraphs" },
+  { value: 2048, label: "Very long", description: "Long-form / multi-section answers" },
+];
+
 export function defaultSettings() {
   return {
     theme: "system", // 'light' | 'dark' | 'system'
     selectedModelId: null,
     autoRecommend: true,
+    generationMode: "beginner", // 'beginner' | 'advanced'
+    activePreset: "balanced", // 'precise' | 'balanced' | 'creative' | 'custom'
     temperature: 0.8,
+    topP: 0.95,
+    frequencyPenalty: 0,
+    presencePenalty: 0,
     maxTokens: 512,
   };
 }

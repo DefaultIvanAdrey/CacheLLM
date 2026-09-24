@@ -5,12 +5,11 @@
  *  - App shell (HTML/CSS/JS/icons/manifest): precached on install, served
  *    cache-first so the UI opens instantly and fully offline after first
  *    visit.
- *  - Everything else (the WebLLM library fetched from esm.run, and model
- *    weight/wasm files fetched from Hugging Face CDNs by WebLLM itself):
- *    runtime-cached with a "cache, falling back to network, then cache the
- *    response" strategy. This is what makes the *model* usable offline
- *    after the first successful download — WebLLM's own IndexedDB/Cache
- *    bookkeeping still applies on top of this.
+ *  - Everything else — the WebLLM engine library, model weight/wasm/
+ *    tokenizer files, AND the Gravity UI icon SVGs fetched at runtime from
+ *    jsDelivr/unpkg — is runtime-cached with a "cache first, else network,
+ *    then cache the response" strategy. This is what makes the app (icons
+ *    included) fully usable offline after the first successful load.
  *
  * Model weights are large; the browser's own storage-eviction rules apply.
  * The app requests `navigator.storage.persist()` on first launch to reduce
@@ -18,7 +17,7 @@
  * action.
  */
 
-const VERSION = "v1";
+const VERSION = "v2";
 const SHELL_CACHE = `memory-shell-${VERSION}`;
 const RUNTIME_CACHE = `memory-runtime-${VERSION}`;
 
@@ -35,6 +34,8 @@ const SHELL_URLS = [
   "./js/device.js",
   "./js/llm.js",
   "./js/icons.js",
+  "./js/modelpicker.js",
+  "./js/modelutils.js",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/icon-maskable-192.png",
@@ -108,8 +109,9 @@ self.addEventListener("fetch", (event) => {
   }
 
   // Everything else (WebLLM library chunks, model shards, wasm, tokenizer
-  // files, etc. — same-origin or cross-origin): cache-first, then network,
-  // caching the result for next time (and for offline use).
+  // files, Gravity UI icon SVGs, etc. — same-origin or cross-origin):
+  // cache-first, then network, caching the result for next time (and for
+  // offline use).
   event.respondWith(
     caches.match(req).then((cached) => {
       if (cached) return cached;

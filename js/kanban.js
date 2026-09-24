@@ -1,13 +1,14 @@
 /**
  * kanban.js
  * Renders and manages the "memory" Kanban board: columns, cards, formula
- * previews, card editor modal, and touch-friendly drag & drop (built on the
- * Pointer Events API rather than HTML5 DnD, since HTML5 drag-and-drop does
- * not work reliably on mobile touchscreens).
+ * previews, card editor modal, and touch-friendly drag & drop for BOTH
+ * cards (within/between columns) and whole columns (reordering), built on
+ * the Pointer Events API rather than HTML5 DnD, since HTML5 drag-and-drop
+ * does not work reliably on mobile touchscreens.
  */
 import { evaluateCardContent, extractReferences } from "./formula.js";
 import { genId, exportBoardToFile, importBoardFromFile } from "./storage.js";
-import { Icon } from "./icons.js";
+import { iconPlaceholder, icon, mountIcons } from "./icons.js";
 
 const COLUMN_PALETTE = [
   "var(--col-identity)",
@@ -30,7 +31,8 @@ export class KanbanBoard {
     this.setBoard = opts.setBoard;
     this.onToast = opts.onToast || (() => {});
     this.filter = "";
-    this.drag = null; // active drag state
+    this.drag = null; // active card-drag state
+    this.colDrag = null; // active column-drag state
     this._bindGlobalPointerHandlers();
   }
 
@@ -50,16 +52,20 @@ export class KanbanBoard {
     toolbar.className = "board-toolbar";
     toolbar.innerHTML = `
       <div class="left">
-        <input type="search" placeholder="Filter cards…" id="boardFilter" style="width:200px" />
+        <div class="search-field">
+          ${iconPlaceholder("search", { size: 14 })}
+          <input type="search" placeholder="Filter cards…" id="boardFilter" style="width:170px" />
+        </div>
         <span class="badge">${board.cards.length} card${board.cards.length === 1 ? "" : "s"}</span>
       </div>
       <div class="right">
-        <button class="btn sm" id="exportBoardBtn">${Icon.download}<span>Export JSON</span></button>
-        <button class="btn sm" id="importBoardBtn">${Icon.upload}<span>Import JSON</span></button>
+        <button class="btn sm" id="exportBoardBtn">${iconPlaceholder("download", { size: 14 })}<span>Export JSON</span></button>
+        <button class="btn sm" id="importBoardBtn">${iconPlaceholder("upload", { size: 14 })}<span>Import JSON</span></button>
         <input type="file" id="importBoardFile" accept="application/json" class="hidden" />
       </div>
     `;
     this.root.appendChild(toolbar);
+    mountIcons(toolbar);
     toolbar.querySelector("#boardFilter").value = this.filter;
     toolbar.querySelector("#boardFilter").addEventListener("input", (e) => {
       this.filter = e.target.value;
@@ -100,7 +106,6 @@ export class KanbanBoard {
       const colEl = document.createElement("div");
       colEl.className = "column";
       colEl.dataset.columnId = col.id;
-      colEl.style.setProperty("--dotcolor", COLUMN_PALETTE[i % COLUMN_PALETTE.length]);
 
       const cards = board.cards.filter((c) => c.columnId === col.id);
       const visibleCards = q
@@ -113,11 +118,15 @@ export class KanbanBoard {
       const header = document.createElement("div");
       header.className = "column-header";
       header.innerHTML = `
+        <span class="column-drag-handle" title="Drag to reorder columns">${iconPlaceholder("drag", { size: 16 })}</span>
         <span class="column-dot" style="background:${COLUMN_PALETTE[i % COLUMN_PALETTE.length]}"></span>
         <input class="column-title-input" value="${escapeAttr(col.title)}" />
         <span class="column-count">${cards.length}</span>
-        <button class="btn icon ghost sm column-menu-btn" title="Delete column">${Icon.trash}</button>
+        <button class="btn icon ghost sm column-menu-btn" title="Delete column">${iconPlaceholder("trash", { size: 14 })}</button>
       `;
+      mountIcons(header);
+      header.querySelector(".column-drag-handle").addEventListener("pointerdown", (e) => this._onColumnPointerDown(e, colEl, col));
+
       const titleInput = header.querySelector(".column-title-input");
       titleInput.addEventListener("change", async () => {
         col.title = titleInput.value.trim() || col.title;
@@ -141,7 +150,8 @@ export class KanbanBoard {
 
       const footer = document.createElement("div");
       footer.className = "column-footer";
-      footer.innerHTML = `<button class="add-card-btn">${Icon.plus}<span>Add card</span></button>`;
+      footer.innerHTML = `<button class="add-card-btn">${iconPlaceholder("plus", { size: 14 })}<span>Add card</span></button>`;
+      mountIcons(footer);
       footer.querySelector("button").addEventListener("click", () => this.openCardEditor(null, col.id));
       colEl.appendChild(footer);
 
@@ -165,7 +175,10 @@ export class KanbanBoard {
 
     const addColBtn = document.createElement("button");
     addColBtn.className = "add-column-btn";
-    addColBtn.innerHTML = `+ Add column`;
+    addColBtn.appendChild(icon("columnAdd", { size: 16 }));
+    const addColLabel = document.createElement("span");
+    addColLabel.textContent = "Add column";
+    addColBtn.appendChild(addColLabel);
     addColBtn.addEventListener("click", async () => {
       const title = prompt("Column name?", "New column");
       if (!title) return;
@@ -197,7 +210,7 @@ export class KanbanBoard {
       ${refs.length ? `<div class="kcard-footer"><span class="kcard-refs">↳ refs: ${refs.map(escapeHtml).join(", ")}</span></div>` : ""}
     `;
 
-    el.addEventListener("click", (e) => {
+    el.addEventListener("click", () => {
       if (this._suppressClick) {
         this._suppressClick = false;
         return;
@@ -213,10 +226,21 @@ export class KanbanBoard {
   /* ------------------------------- Drag & Drop (Pointer Events) ------------------------------- */
 
   _bindGlobalPointerHandlers() {
-    window.addEventListener("pointermove", (e) => this._onPointerMove(e));
-    window.addEventListener("pointerup", (e) => this._onPointerUp(e));
-    window.addEventListener("pointercancel", (e) => this._onPointerUp(e));
+    window.addEventListener("pointermove", (e) => {
+      this._onPointerMove(e);
+      this._onColumnPointerMove(e);
+    });
+    window.addEventListener("pointerup", (e) => {
+      this._onPointerUp(e);
+      this._onColumnPointerUp(e);
+    });
+    window.addEventListener("pointercancel", (e) => {
+      this._onPointerUp(e);
+      this._onColumnPointerUp(e);
+    });
   }
+
+  /* ---- Card drag ---- */
 
   _onCardPointerDown(e, el, card) {
     if (e.button !== undefined && e.button !== 0) return;
@@ -288,7 +312,6 @@ export class KanbanBoard {
     const targetBody = d.placeholder.parentElement;
     const targetColumnId = targetBody ? targetBody.dataset.columnId : null;
 
-    // Determine new order: read all .kcard ids currently in targetBody (placeholder marks position)
     const board = this.board();
     const card = board.cards.find((c) => c.id === d.cardId);
     if (!card || !targetColumnId) {
@@ -297,19 +320,16 @@ export class KanbanBoard {
       return;
     }
 
-    // Build the new global order: everything before placeholder in DOM order (across all columns,
-    // reading column by column) determines array order. Simplify: compute sibling order within target column.
     const siblingIds = [...targetBody.children]
       .filter((n) => n.classList.contains("kcard") || n === d.placeholder)
       .map((n) => (n === d.placeholder ? "__PLACEHOLDER__" : n.dataset.cardId));
 
     card.columnId = targetColumnId;
 
-    // Remove the card from its old position in the array, then reinsert according to computed order.
     const withoutCard = board.cards.filter((c) => c.id !== card.id);
     const idx = siblingIds.indexOf("__PLACEHOLDER__");
     const targetColumnCardIdsInOrder = siblingIds.filter((id) => id !== "__PLACEHOLDER__");
-    const beforeId = targetColumnCardIdsInOrder[idx] /* may be undefined if last */;
+    const beforeId = targetColumnCardIdsInOrder[idx];
 
     let insertAt = withoutCard.length;
     if (beforeId) {
@@ -331,6 +351,94 @@ export class KanbanBoard {
     this.renderColumns();
   }
 
+  /* ---- Column drag (reordering whole columns) ---- */
+
+  _onColumnPointerDown(e, colEl, col) {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = colEl.getBoundingClientRect();
+    this.colDrag = {
+      pointerId: e.pointerId,
+      columnId: col.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      moved: false,
+      sourceEl: colEl,
+      placeholder: null,
+      clone: null,
+      width: rect.width,
+      height: rect.height,
+    };
+  }
+
+  _onColumnPointerMove(e) {
+    const d = this.colDrag;
+    if (!d || d.pointerId !== e.pointerId) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (!d.moved && Math.hypot(dx, dy) < 8) return;
+
+    if (!d.moved) {
+      d.moved = true;
+      const rect = d.sourceEl.getBoundingClientRect();
+
+      d.placeholder = document.createElement("div");
+      d.placeholder.className = "column-ghost";
+      d.placeholder.style.width = `${rect.width}px`;
+      d.sourceEl.parentNode.insertBefore(d.placeholder, d.sourceEl);
+
+      d.clone = d.sourceEl.cloneNode(true);
+      d.clone.classList.add("column-dragging");
+      d.clone.style.cssText = `position:fixed; left:${rect.left}px; top:${rect.top}px; width:${rect.width}px; height:${rect.height}px; z-index:150; pointer-events:none; box-shadow:var(--shadow-md); opacity:0.92; transform: rotate(1deg);`;
+      document.body.appendChild(d.clone);
+      d.sourceEl.style.visibility = "hidden";
+      d.sourceEl.style.pointerEvents = "none";
+    }
+
+    d.clone.style.left = `${e.clientX - d.width / 2}px`;
+    d.clone.style.top = `${e.clientY - d.height / 2}px`;
+
+    const containerRect = this.columnsEl.getBoundingClientRect();
+    const clampedX = Math.min(Math.max(e.clientX, containerRect.left + 10), containerRect.right - 10);
+
+    d.clone.style.display = "none";
+    const under = document.elementFromPoint(clampedX, e.clientY);
+    d.clone.style.display = "";
+    if (!under) return;
+
+    const overColumn = under.closest(".column");
+    if (overColumn && overColumn !== d.sourceEl && overColumn !== d.placeholder) {
+      const rect = overColumn.getBoundingClientRect();
+      const before = clampedX < rect.left + rect.width / 2;
+      this.columnsEl.insertBefore(d.placeholder, before ? overColumn : overColumn.nextSibling);
+    }
+  }
+
+  async _onColumnPointerUp(e) {
+    const d = this.colDrag;
+    if (!d || d.pointerId !== e.pointerId) return;
+    this.colDrag = null;
+
+    if (!d.moved) return;
+
+    d.placeholder.replaceWith(d.sourceEl);
+    d.sourceEl.style.visibility = "";
+    d.sourceEl.style.pointerEvents = "";
+    d.clone && d.clone.remove();
+
+    const orderedIds = [...this.columnsEl.children]
+      .filter((n) => n.classList.contains("column"))
+      .map((n) => n.dataset.columnId);
+
+    const board = this.board();
+    const byId = new Map(board.columns.map((c) => [c.id, c]));
+    board.columns = orderedIds.map((id) => byId.get(id)).filter(Boolean);
+
+    await this.persist();
+    this.renderColumns();
+  }
+
   /* ------------------------------------- Card editor modal ------------------------------------- */
 
   openCardEditor(cardId, defaultColumnId) {
@@ -347,7 +455,7 @@ export class KanbanBoard {
       <div class="modal">
         <div class="modal-header">
           <strong>${isNew ? "New card" : "Edit card"}</strong>
-          <button class="btn icon ghost" id="closeModalBtn">${Icon.close}</button>
+          <button class="btn icon ghost" id="closeModalBtn">${iconPlaceholder("close", { size: 16 })}</button>
         </div>
         <div class="modal-body">
           <div>
@@ -375,7 +483,7 @@ export class KanbanBoard {
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn danger" id="deleteCardBtn" ${isNew ? "style='visibility:hidden'" : ""}>${Icon.trash}<span>Delete</span></button>
+          <button class="btn danger" id="deleteCardBtn" ${isNew ? "style='visibility:hidden'" : ""}>${iconPlaceholder("trash", { size: 14 })}<span>Delete</span></button>
           <div style="display:flex; gap:8px;">
             <button class="btn" id="cancelCardBtn">Cancel</button>
             <button class="btn primary" id="saveCardBtn">Save</button>
@@ -384,6 +492,7 @@ export class KanbanBoard {
       </div>
     `;
     document.body.appendChild(overlay);
+    mountIcons(overlay);
 
     const titleInput = overlay.querySelector("#cardTitleInput");
     const contentInput = overlay.querySelector("#cardContentInput");

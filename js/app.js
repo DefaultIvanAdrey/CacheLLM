@@ -1,10 +1,21 @@
 import { initTheme, cycleTheme, getStoredTheme } from "./theme.js";
-import { loadBoard, saveBoard, loadSettings, saveSettings, loadChatHistory, saveChatHistory } from "./storage.js";
+import {
+  loadBoard,
+  saveBoard,
+  loadSettings,
+  saveSettings,
+  loadChatHistory,
+  saveChatHistory,
+  GENERATION_PRESETS,
+  MAX_TOKENS_PRESETS,
+} from "./storage.js";
 import { KanbanBoard } from "./kanban.js";
 import { LLMEngine, getModelList } from "./llm.js";
 import { detectDevice, recommendModels } from "./device.js";
 import { evaluateCardContent } from "./formula.js";
-import { Icon } from "./icons.js";
+import { icon, iconPlaceholder, mountIcons, preloadAllIcons } from "./icons.js";
+import { openModelPicker } from "./modelpicker.js";
+import { formatSizeMB, extractFamily } from "./modelutils.js";
 
 /* --------------------------------- State --------------------------------- */
 const state = {
@@ -32,27 +43,31 @@ const els = {
   statusText: document.getElementById("statusText"),
 };
 
+preloadAllIcons();
+mountIcons(document);
+
 /* --------------------------------- Toasts --------------------------------- */
 function toast(msg, type = "info") {
   const el = document.createElement("div");
   el.className = `toast ${type === "error" ? "error" : ""}`;
-  el.textContent = msg;
+  el.appendChild(icon(type === "error" ? "alert" : "circleCheck", { size: 15 }));
+  const span = document.createElement("span");
+  span.textContent = msg;
+  el.appendChild(span);
   els.toastStack.appendChild(el);
   setTimeout(() => {
     el.style.transition = "opacity 200ms ease";
     el.style.opacity = "0";
     setTimeout(() => el.remove(), 220);
-  }, 3200);
+  }, 3400);
 }
 
 /* --------------------------------- Theme --------------------------------- */
-function themeIconFor(pref) {
-  if (pref === "light") return Icon.sun;
-  if (pref === "dark") return Icon.moon;
-  return Icon.laptop;
-}
 function refreshThemeButton() {
-  els.themeToggle.innerHTML = themeIconFor(getStoredTheme());
+  const pref = getStoredTheme();
+  const name = pref === "light" ? "sun" : pref === "dark" ? "moon" : "laptop";
+  els.themeToggle.innerHTML = "";
+  els.themeToggle.appendChild(icon(name, { size: 18 }));
 }
 els.themeToggle.addEventListener("click", () => {
   cycleTheme();
@@ -134,14 +149,24 @@ function buildSystemPrompt() {
   )}`;
 }
 
+function findModelById(id) {
+  return state.modelList.find((m) => m.model_id === id) || null;
+}
+
 function renderChatView() {
   const view = document.createElement("div");
   view.className = "chat-view";
   view.innerHTML = `
     <div class="chat-model-bar">
-      <select id="modelSelect"></select>
+      <button class="model-select-btn" id="modelSelectBtn" type="button">
+        <span class="icon-box icon-18" data-icon="chip"></span>
+        <span class="msb-text">
+          <div class="msb-name" id="msbName">Loading model list…</div>
+          <div class="msb-meta" id="msbMeta"></div>
+        </span>
+        <span class="icon-box icon-16" data-icon="chevronDown"></span>
+      </button>
       <button class="btn sm accent" id="loadModelBtn">Load model</button>
-      <span class="recommend-pill" id="recommendPill"></span>
       <span class="badge" id="modelStatusBadge"></span>
     </div>
     <div class="progress-wrap hidden" id="progressWrap">
@@ -152,16 +177,20 @@ function renderChatView() {
     <div class="chat-input-bar">
       <div class="chat-input-row">
         <textarea id="chatInput" rows="1" placeholder="Ask your on-device assistant… (Shift+Enter for newline)"></textarea>
-        <button class="btn primary icon" id="sendBtn">${Icon.send}</button>
-        <button class="btn icon hidden" id="stopBtn" title="Stop generating">${Icon.stop}</button>
+        <button class="btn primary icon" id="sendBtn"></button>
+        <button class="btn icon hidden" id="stopBtn" title="Stop generating"></button>
       </div>
     </div>
   `;
   els.mainView.appendChild(view);
+  mountIcons(view);
+  view.querySelector("#sendBtn").appendChild(icon("send", { size: 16 }));
+  view.querySelector("#stopBtn").appendChild(icon("stop", { size: 16 }));
 
-  const modelSelect = view.querySelector("#modelSelect");
+  const modelBtn = view.querySelector("#modelSelectBtn");
+  const msbName = view.querySelector("#msbName");
+  const msbMeta = view.querySelector("#msbMeta");
   const loadBtn = view.querySelector("#loadModelBtn");
-  const recommendPill = view.querySelector("#recommendPill");
   const statusBadge = view.querySelector("#modelStatusBadge");
   const progressWrap = view.querySelector("#progressWrap");
   const progressBar = view.querySelector("#progressBar");
@@ -171,15 +200,49 @@ function renderChatView() {
   const sendBtn = view.querySelector("#sendBtn");
   const stopBtn = view.querySelector("#stopBtn");
 
-  populateModelSelect(modelSelect);
-  updateModelStatusBadge(statusBadge);
-  if (state.recommendation?.primary) {
-    recommendPill.innerHTML = `${Icon.chip}<span>Recommended: ${state.recommendation.primary.model_id}</span>`;
+  function refreshModelButton() {
+    const selected = findModelById(state.settings.selectedModelId) || state.recommendation?.primary;
+    if (!selected) {
+      msbName.textContent = state.modelList.length ? "Choose a model…" : "Loading model list…";
+      msbMeta.textContent = "";
+      return;
+    }
+    const isRec = state.recommendation?.primary?.model_id === selected.model_id;
+    msbName.textContent = selected.model_id;
+    msbMeta.textContent = `${formatSizeMB(selected.vram_required_MB)} · ${extractFamily(selected.model_id)}${isRec ? " · ★ recommended for your device" : ""}`;
+    if (!state.settings.selectedModelId) state.settings.selectedModelId = selected.model_id;
   }
+  refreshModelButton();
+  updateModelStatusBadge(statusBadge);
+
+  modelBtn.addEventListener("click", () => {
+    if (!state.modelList.length) {
+      toast("Still fetching the model catalog — try again in a moment.", "error");
+      return;
+    }
+    openModelPicker({
+      modelList: state.modelList,
+      device: state.device,
+      recommendation: state.recommendation,
+      currentSelection: state.settings.selectedModelId,
+      onSelect: async (model) => {
+        state.settings.selectedModelId = model.model_id;
+        await saveSettings(state.settings);
+        refreshModelButton();
+      },
+    });
+  });
 
   renderMessages(messagesEl);
 
-  loadBtn.addEventListener("click", () => loadSelectedModel(modelSelect.value, { progressWrap, progressBar, progressLabel, statusBadge, loadBtn }));
+  loadBtn.addEventListener("click", () => {
+    const modelId = state.settings.selectedModelId || state.recommendation?.primary?.model_id;
+    if (!modelId) {
+      toast("Pick a model first.", "error");
+      return;
+    }
+    loadSelectedModel(modelId, { progressWrap, progressBar, progressLabel, statusBadge, loadBtn });
+  });
 
   chatInput.addEventListener("input", () => {
     chatInput.style.height = "auto";
@@ -197,45 +260,12 @@ function renderChatView() {
   });
 }
 
-function populateModelSelect(select) {
-  select.innerHTML = "";
-  if (!state.modelList.length) {
-    select.innerHTML = `<option>Loading model list…</option>`;
-    return;
-  }
-  const rec = state.recommendation;
-  const recIds = new Set([rec?.primary?.model_id, ...(rec?.alternatives || []).map((m) => m.model_id)].filter(Boolean));
-
-  const makeOpt = (m) => {
-    const opt = document.createElement("option");
-    opt.value = m.model_id;
-    const size = m.vram_required_MB ? `${(m.vram_required_MB / 1024).toFixed(1)}GB` : "";
-    opt.textContent = `${recIds.has(m.model_id) ? "★ " : ""}${m.model_id} ${size ? `(${size})` : ""}`;
-    return opt;
-  };
-
-  if (rec?.primary) select.appendChild(makeOpt(rec.primary));
-  for (const alt of rec?.alternatives || []) select.appendChild(makeOpt(alt));
-
-  const divider = document.createElement("option");
-  divider.disabled = true;
-  divider.textContent = "──────── All models ────────";
-  select.appendChild(divider);
-
-  const rest = state.modelList
-    .filter((m) => typeof m.vram_required_MB === "number" && !recIds.has(m.model_id))
-    .sort((a, b) => a.vram_required_MB - b.vram_required_MB);
-  for (const m of rest) select.appendChild(makeOpt(m));
-
-  if (state.settings.selectedModelId) select.value = state.settings.selectedModelId;
-}
-
 function updateModelStatusBadge(badge) {
   const map = {
     unloaded: ["", "Not loaded"],
     loading: ["accent", "Loading…"],
     ready: ["success", "Ready"],
-    error: ["", "Error"],
+    error: ["danger", "Error"],
   };
   const [cls, label] = map[state.modelStatus] || map.unloaded;
   badge.className = `badge ${cls}`;
@@ -329,6 +359,9 @@ async function handleSend(input, messagesEl, sendBtn, stopBtn) {
   try {
     await state.engine.chatStream(messages, {
       temperature: state.settings.temperature,
+      topP: state.settings.topP,
+      frequencyPenalty: state.settings.frequencyPenalty,
+      presencePenalty: state.settings.presencePenalty,
       maxTokens: state.settings.maxTokens,
       onToken: (_delta, full) => {
         assistantMsg.content = full;
@@ -368,9 +401,11 @@ function renderBoardView() {
 /* ============================================================================
    SETTINGS VIEW
    ============================================================================ */
-function fmtMB(mb) {
-  if (!mb) return "0 MB";
-  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+function matchesPreset(temperature, topP) {
+  for (const [key, p] of Object.entries(GENERATION_PRESETS)) {
+    if (Math.abs(p.temperature - temperature) < 0.001 && Math.abs(p.topP - topP) < 0.001) return key;
+  }
+  return null;
 }
 
 function renderSettingsView() {
@@ -378,29 +413,30 @@ function renderSettingsView() {
   view.className = "settings-view";
   const d = state.device;
   const rec = state.recommendation;
+  const s = state.settings;
 
   view.innerHTML = `
     <div class="card-surface settings-section">
-      <h3>Device &amp; WebGPU</h3>
+      <h3>${iconPlaceholder("chip", { size: 16 })}Device &amp; WebGPU</h3>
       <div class="device-grid">
         <div class="device-stat"><div class="v">${d ? d.platform : "…"}</div><div class="k">Platform</div></div>
         <div class="device-stat"><div class="v">${d ? (d.isMobile ? "Mobile" : "Desktop") : "…"}</div><div class="k">Form factor</div></div>
         <div class="device-stat"><div class="v">${d?.deviceMemoryGB ? d.deviceMemoryGB + " GB" : "Not reported"}</div><div class="k">Device RAM</div></div>
         <div class="device-stat"><div class="v">${d?.cores || "Not reported"}</div><div class="k">CPU cores</div></div>
         <div class="device-stat"><div class="v">${d?.gpu?.supported ? "Supported" : "Unavailable"}</div><div class="k">WebGPU</div></div>
-        <div class="device-stat"><div class="v">${d ? fmtMB(d.budgetMB) : "…"}</div><div class="k">Estimated model budget</div></div>
+        <div class="device-stat"><div class="v">${d ? formatSizeMB(d.budgetMB) : "…"}</div><div class="k">Estimated model budget</div></div>
       </div>
       <p class="hint" style="margin-top:10px;">
         Browsers don't expose real VRAM for privacy reasons, so this budget is a conservative estimate combining
         WebGPU availability, reported RAM (when available), CPU cores, and platform. You can always pick a
-        different model manually in Chat.
+        different model manually from the searchable list in Chat.
       </p>
       ${
         rec?.primary
           ? `<div class="model-rec-card">
               <div>
                 <div class="name">${rec.primary.model_id}</div>
-                <div class="meta">${fmtMB(rec.primary.vram_required_MB)} VRAM · ${rec.fits ? "fits comfortably" : "closest available fit"}</div>
+                <div class="meta">${formatSizeMB(rec.primary.vram_required_MB)} VRAM · ${rec.fits ? "fits comfortably" : "closest available fit"}</div>
               </div>
               <button class="btn sm accent" id="useRecommendedBtn">Use this model</button>
             </div>`
@@ -411,7 +447,7 @@ function renderSettingsView() {
     </div>
 
     <div class="card-surface settings-section">
-      <h3>Appearance</h3>
+      <h3>${iconPlaceholder("laptop", { size: 16 })}Appearance</h3>
       <div class="settings-row">
         <div class="label-block"><div class="t">Theme</div><div class="d">Light, dark, or follow system</div></div>
         <div style="display:flex; gap:6px;">
@@ -422,21 +458,106 @@ function renderSettingsView() {
       </div>
     </div>
 
-    <div class="card-surface settings-section">
-      <h3>Generation</h3>
-      <div class="settings-row">
-        <div class="label-block"><div class="t">Temperature</div><div class="d">Higher = more creative, lower = more focused</div></div>
-        <input type="range" min="0" max="1.5" step="0.05" id="tempRange" style="width:140px" value="${state.settings.temperature}" />
-        <span id="tempVal" class="badge">${state.settings.temperature}</span>
+    <div class="card-surface settings-section" id="generationSection">
+      <h3>${iconPlaceholder("gauge", { size: 16 })}Generation</h3>
+      <div class="mode-toggle" id="genModeToggle">
+        <button data-mode="beginner">Beginner</button>
+        <button data-mode="advanced">Advanced</button>
       </div>
-      <div class="settings-row">
-        <div class="label-block"><div class="t">Max response tokens</div></div>
-        <input type="number" id="maxTokensInput" style="width:90px" min="32" max="4096" step="32" value="${state.settings.maxTokens}" />
+
+      <div id="beginnerControls" style="margin-top:14px;">
+        <label>Response style</label>
+        <div class="preset-grid" id="presetGrid"></div>
+
+        <div class="control-block">
+          <div class="control-head">
+            <span class="label-main">Response length</span>
+          </div>
+          <select id="maxTokensPresetSelect">
+            ${MAX_TOKENS_PRESETS.map((p) => `<option value="${p.value}">${p.label} — ${p.description}</option>`).join("")}
+          </select>
+        </div>
       </div>
+
+      <div id="advancedControls" class="hidden" style="margin-top:8px;">
+        <div class="control-block">
+          <div class="control-head">
+            <span class="label-main">Temperature <button class="info-btn" data-info="tempDesc">${iconPlaceholder("info", { size: 14 })}</button></span>
+            <span class="value-pill" id="tempValuePill">${s.temperature.toFixed(2)}</span>
+          </div>
+          <input type="range" id="tempRange" min="0" max="1.5" step="0.05" value="${s.temperature}" />
+          <div class="control-desc hidden" id="tempDesc">
+            Controls how "random" each next word is. <strong>Lower</strong> (0–0.4) = focused, predictable, best for facts/code.
+            <strong>Higher</strong> (0.9–1.5) = more varied and surprising, good for brainstorming — but can wander off-topic
+            or get less coherent at the extreme end.
+          </div>
+        </div>
+        <div class="control-block">
+          <div class="control-head">
+            <span class="label-main">Top-p (nucleus sampling) <button class="info-btn" data-info="topPDesc">${iconPlaceholder("info", { size: 14 })}</button></span>
+            <span class="value-pill" id="topPValuePill">${s.topP.toFixed(2)}</span>
+          </div>
+          <input type="range" id="topPRange" min="0.1" max="1" step="0.01" value="${s.topP}" />
+          <div class="control-desc hidden" id="topPDesc">
+            Limits word choices to the smallest set whose combined probability reaches this value.
+            <strong>Lower</strong> = safer, more predictable word choices. <strong>Higher</strong> (close to 1) = considers
+            more unusual words. Usually left around 0.9–0.95; only lower it if answers feel too erratic.
+          </div>
+        </div>
+        <div class="control-block">
+          <div class="control-head">
+            <span class="label-main">Frequency penalty <button class="info-btn" data-info="freqDesc">${iconPlaceholder("info", { size: 14 })}</button></span>
+            <span class="value-pill" id="freqValuePill">${s.frequencyPenalty.toFixed(2)}</span>
+          </div>
+          <input type="range" id="freqRange" min="-2" max="2" step="0.1" value="${s.frequencyPenalty}" />
+          <div class="control-desc hidden" id="freqDesc">
+            Discourages repeating the exact same words/phrases too often. Raise it if the model starts looping or
+            repeating itself; keep at 0 for normal use.
+          </div>
+        </div>
+        <div class="control-block">
+          <div class="control-head">
+            <span class="label-main">Presence penalty <button class="info-btn" data-info="presDesc">${iconPlaceholder("info", { size: 14 })}</button></span>
+            <span class="value-pill" id="presValuePill">${s.presencePenalty.toFixed(2)}</span>
+          </div>
+          <input type="range" id="presRange" min="-2" max="2" step="0.1" value="${s.presencePenalty}" />
+          <div class="control-desc hidden" id="presDesc">
+            Encourages the model to bring up new topics/words it hasn't used yet in this reply, rather than sticking
+            to a narrow theme. Raise for more variety; keep at 0 for normal use.
+          </div>
+        </div>
+        <div class="control-block">
+          <div class="control-head">
+            <span class="label-main">Max response tokens <button class="info-btn" data-info="maxTokDesc">${iconPlaceholder("info", { size: 14 })}</button></span>
+          </div>
+          <input type="number" id="maxTokensInput" min="32" max="4096" step="32" value="${s.maxTokens}" />
+          <div class="control-desc hidden" id="maxTokDesc">
+            A hard cap on how long a single reply can be, measured in "tokens" (roughly ¾ of a word each). Higher
+            allows longer answers but takes more time and memory; very low values may cut answers off mid-sentence.
+          </div>
+        </div>
+        <button class="btn sm" id="resetGenDefaultsBtn">${iconPlaceholder("refresh", { size: 13 })}<span>Reset to Balanced defaults</span></button>
+      </div>
+
+      <details class="guide">
+        <summary>${iconPlaceholder("circleInfo", { size: 15 })}<span>New to these settings? Read a 30-second guide</span><span class="icon-box icon-16 chev" style="margin-left:auto;" data-icon="chevronDown"></span></summary>
+        <div class="guide-body">
+          <dl>
+            <dt>System prompt</dt>
+            <dd>The instructions the model always sees, built automatically from your Memory Board columns marked "Feed into assistant context".</dd>
+            <dt>Temperature &amp; Top-p</dt>
+            <dd>Both control randomness. Start with the presets above — Balanced works well for most chatting. Only go to Advanced mode if you want to fine-tune further.</dd>
+            <dt>Frequency &amp; presence penalty</dt>
+            <dd>Advanced knobs for reducing repetition or encouraging topic variety. Safe to leave at 0.</dd>
+            <dt>Max response tokens</dt>
+            <dd>Think of this as a length limit. If replies get cut off, raise it (Long/Very long, or a higher number in Advanced mode).</dd>
+          </dl>
+        </div>
+      </details>
     </div>
 
     <div class="card-surface settings-section">
-      <h3>Storage &amp; offline</h3>
+      <h3>${iconPlaceholder("archive", { size: 16 })}Storage &amp; offline</h3>
       <div class="settings-row">
         <div class="label-block"><div class="t">Persistent storage</div><div class="d">Prevents the browser from evicting cached model weights</div></div>
         <button class="btn sm" id="persistBtn">Request</button>
@@ -452,6 +573,7 @@ function renderSettingsView() {
     </div>
   `;
   els.mainView.appendChild(view);
+  mountIcons(view);
 
   view.querySelectorAll("[data-theme-choice]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -473,16 +595,130 @@ function renderSettingsView() {
     });
   }
 
-  const tempRange = view.querySelector("#tempRange");
-  const tempVal = view.querySelector("#tempVal");
-  tempRange.addEventListener("input", async () => {
-    state.settings.temperature = parseFloat(tempRange.value);
-    tempVal.textContent = state.settings.temperature;
-    await saveSettings(state.settings);
+  /* ---- Generation: mode toggle ---- */
+  const modeToggle = view.querySelector("#genModeToggle");
+  const beginnerControls = view.querySelector("#beginnerControls");
+  const advancedControls = view.querySelector("#advancedControls");
+  function refreshModeUI() {
+    modeToggle.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.mode === s.generationMode));
+    beginnerControls.classList.toggle("hidden", s.generationMode !== "beginner");
+    advancedControls.classList.toggle("hidden", s.generationMode !== "advanced");
+  }
+  refreshModeUI();
+  modeToggle.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      s.generationMode = btn.dataset.mode;
+      await saveSettings(s);
+      refreshModeUI();
+    });
   });
-  view.querySelector("#maxTokensInput").addEventListener("change", async (e) => {
-    state.settings.maxTokens = parseInt(e.target.value, 10) || 512;
-    await saveSettings(state.settings);
+
+  /* ---- Generation: presets (beginner) ---- */
+  const presetGrid = view.querySelector("#presetGrid");
+  function renderPresets() {
+    presetGrid.innerHTML = "";
+    const active = matchesPreset(s.temperature, s.topP);
+    for (const [key, p] of Object.entries(GENERATION_PRESETS)) {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "preset-card" + (active === key ? " active" : "");
+      card.innerHTML = `<div class="pc-title">${p.label}</div><div class="pc-desc">${p.description}</div>`;
+      card.addEventListener("click", async () => {
+        s.temperature = p.temperature;
+        s.topP = p.topP;
+        s.activePreset = key;
+        await saveSettings(s);
+        renderPresets();
+        syncAdvancedInputsFromSettings();
+      });
+      presetGrid.appendChild(card);
+    }
+  }
+  renderPresets();
+
+  /* ---- Generation: max tokens preset select (beginner) ---- */
+  const maxTokensSelect = view.querySelector("#maxTokensPresetSelect");
+  const closestPresetValue = MAX_TOKENS_PRESETS.reduce((best, p) => (Math.abs(p.value - s.maxTokens) < Math.abs(best - s.maxTokens) ? p.value : best), MAX_TOKENS_PRESETS[1].value);
+  maxTokensSelect.value = String(closestPresetValue);
+  maxTokensSelect.addEventListener("change", async () => {
+    s.maxTokens = parseInt(maxTokensSelect.value, 10);
+    await saveSettings(s);
+    const rawInput = view.querySelector("#maxTokensInput");
+    if (rawInput) rawInput.value = s.maxTokens;
+  });
+
+  /* ---- Generation: advanced sliders ---- */
+  const tempRange = view.querySelector("#tempRange");
+  const tempPill = view.querySelector("#tempValuePill");
+  const topPRange = view.querySelector("#topPRange");
+  const topPPill = view.querySelector("#topPValuePill");
+  const freqRange = view.querySelector("#freqRange");
+  const freqPill = view.querySelector("#freqValuePill");
+  const presRange = view.querySelector("#presRange");
+  const presPill = view.querySelector("#presValuePill");
+  const maxTokensInput = view.querySelector("#maxTokensInput");
+
+  function syncAdvancedInputsFromSettings() {
+    tempRange.value = s.temperature;
+    tempPill.textContent = s.temperature.toFixed(2);
+    topPRange.value = s.topP;
+    topPPill.textContent = s.topP.toFixed(2);
+    freqRange.value = s.frequencyPenalty;
+    freqPill.textContent = s.frequencyPenalty.toFixed(2);
+    presRange.value = s.presencePenalty;
+    presPill.textContent = s.presencePenalty.toFixed(2);
+    maxTokensInput.value = s.maxTokens;
+  }
+
+  tempRange.addEventListener("input", async () => {
+    s.temperature = parseFloat(tempRange.value);
+    tempPill.textContent = s.temperature.toFixed(2);
+    await saveSettings(s);
+    renderPresets();
+  });
+  topPRange.addEventListener("input", async () => {
+    s.topP = parseFloat(topPRange.value);
+    topPPill.textContent = s.topP.toFixed(2);
+    await saveSettings(s);
+    renderPresets();
+  });
+  freqRange.addEventListener("input", async () => {
+    s.frequencyPenalty = parseFloat(freqRange.value);
+    freqPill.textContent = s.frequencyPenalty.toFixed(2);
+    await saveSettings(s);
+  });
+  presRange.addEventListener("input", async () => {
+    s.presencePenalty = parseFloat(presRange.value);
+    presPill.textContent = s.presencePenalty.toFixed(2);
+    await saveSettings(s);
+  });
+  maxTokensInput.addEventListener("change", async () => {
+    s.maxTokens = parseInt(maxTokensInput.value, 10) || 512;
+    await saveSettings(s);
+    const closest = MAX_TOKENS_PRESETS.reduce((best, p) => (Math.abs(p.value - s.maxTokens) < Math.abs(best - s.maxTokens) ? p.value : best), MAX_TOKENS_PRESETS[1].value);
+    maxTokensSelect.value = String(closest);
+  });
+
+  view.querySelector("#resetGenDefaultsBtn").addEventListener("click", async () => {
+    const balanced = GENERATION_PRESETS.balanced;
+    s.temperature = balanced.temperature;
+    s.topP = balanced.topP;
+    s.frequencyPenalty = 0;
+    s.presencePenalty = 0;
+    s.maxTokens = 512;
+    await saveSettings(s);
+    syncAdvancedInputsFromSettings();
+    renderPresets();
+    maxTokensSelect.value = "512";
+    toast("Generation settings reset to Balanced defaults.");
+  });
+
+  /* ---- info disclosure buttons ---- */
+  view.querySelectorAll(".info-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const target = view.querySelector(`#${btn.dataset.info}`);
+      if (target) target.classList.toggle("hidden");
+    });
   });
 
   view.querySelector("#persistBtn").addEventListener("click", async () => {
@@ -532,8 +768,7 @@ async function init() {
     toast("Couldn't reach the model registry — check your connection for first-time setup.", "error");
   }
 
-  if (state.route === "chat") renderRoute();
-  if (state.route === "settings") renderRoute();
+  renderRoute();
 
   if (navigator.storage && navigator.storage.persist) {
     navigator.storage.persisted().then((already) => {
