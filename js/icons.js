@@ -1,30 +1,16 @@
 /**
  * icons.js
- * Renders icons from the real Gravity UI icon pack
- * (https://github.com/gravity-ui/icons — MIT, published as @gravity-ui/icons,
- * the same pack listed at https://svgicons.com/icon-set/gravity-ui-svg-icons).
+ * Renders icons from the real Gravity UI icon pack (github.com/gravity-ui/icons,
+ * MIT, the same set listed at svgicons.com/icon-set/gravity-ui-svg-icons).
  *
- * Because this is a strictly offline-first PWA, icons are NOT bundled as a
- * huge local sprite sheet. Instead — exactly like the WebLLM engine library
- * and model weights — the actual SVG files are fetched once from a public
- * CDN mirror of the npm package, then cached by the Service Worker's runtime
- * cache so every subsequent load (including fully offline) reuses them.
+ * Icons are fetched once at runtime from a CDN mirror of @gravity-ui/icons,
+ * normalized to a fixed size, then cached offline by the Service Worker —
+ * same pattern as the WebLLM engine/model weights. If every network
+ * candidate fails, a small local fallback glyph is used instead so the UI
+ * never shows a broken/empty icon.
  *
- * Robustness:
- *  - Each semantic icon name maps to one or more *candidate* real Gravity UI
- *    file names (a couple of slots have a plausible alternate spelling —
- *    trying both costs nothing and avoids a single wrong guess breaking the
- *    icon).
- *  - Two CDNs are tried per candidate (jsDelivr, then unpkg).
- *  - If every network attempt fails (e.g. completely offline on a brand new
- *    install before anything has been cached), a small hand-drawn fallback
- *    SVG is used instead so the UI never breaks or shows a blank box.
- *  - Every icon is rendered into a fixed-size box via CSS (see .icon-box /
- *    .icon-* classes in styles.css) and the fetched SVG's own width/height
- *    attributes are stripped and replaced with 100%/100%, so icons from a
- *    16px grid and any fallback icons all render at *exactly* the size the
- *    call site asked for — no oversized or undersized icons regardless of
- *    the source file's native dimensions.
+ * Sizing is enforced TWICE (CSS class + inline style set in JS) so an icon
+ * can never render oversized or undersized regardless of size value used.
  */
 
 const PACK_VERSION = "2.20.0";
@@ -33,7 +19,6 @@ const CDN_BASES = [
   `https://unpkg.com/@gravity-ui/icons@${PACK_VERSION}/svgs`,
 ];
 
-// semantic name -> ordered list of real Gravity UI svg file names to try
 const ICON_CANDIDATES = {
   plus: ["plus"],
   trash: ["trash-bin", "trash"],
@@ -74,11 +59,24 @@ const ICON_CANDIDATES = {
   chevronDown: ["chevron-down", "arrow-chevron-down"],
   chevronUp: ["chevron-up", "arrow-chevron-up"],
   circleInfo: ["circle-info"],
+  paperclip: ["paperclip"],
+  image: ["picture", "image"],
+  globe: ["globe"],
+  brain: ["bulb", "lightbulb"],
+  database: ["database"],
+  key: ["key"],
+  link: ["link"],
+  code: ["code"],
+  file: ["file", "file-text"],
+  cloudArrow: ["cloud-arrow-up-in", "cloud"],
+  handle: ["dots-6-vertical", "grip-dots-vertical", "bars"],
+  bolt: ["bolt", "zap"],
+  eye: ["eye"],
+  eyeSlash: ["eye-slash"],
+  robot: ["cpu"],
+  wikipedia: ["book-open", "book"],
 };
 
-// Hand-drawn fallbacks used only if every network attempt fails. Kept
-// intentionally simple; normalized through the exact same sizing pipeline
-// as the real icon pack so there's never a visual mismatch.
 const FALLBACK = {
   plus: { viewBox: "0 0 24 24", body: '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
   trash: { viewBox: "0 0 24 24", body: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' },
@@ -119,11 +117,25 @@ const FALLBACK = {
   clock: { viewBox: "0 0 24 24", body: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
   chevronDown: { viewBox: "0 0 24 24", body: '<path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' },
   chevronUp: { viewBox: "0 0 24 24", body: '<path d="m6 15 6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' },
+  paperclip: { viewBox: "0 0 24 24", body: '<path d="M21 12.5 12.5 21a5 5 0 0 1-7-7L14 5.5a3.5 3.5 0 1 1 5 5L10.5 19a2 2 0 1 1-2.8-2.8L15.5 8.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' },
+  image: { viewBox: "0 0 24 24", body: '<rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="m21 15-5-5L5 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' },
+  globe: { viewBox: "0 0 24 24", body: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" stroke="currentColor" stroke-width="2" fill="none"/>' },
+  brain: { viewBox: "0 0 24 24", body: '<path d="M9 2a3 3 0 0 0-3 3v.2A3 3 0 0 0 4 8v1a3 3 0 0 0 0 6v1a3 3 0 0 0 2 2.8V19a3 3 0 0 0 3 3 2 2 0 0 0 2-2V5a3 3 0 0 0-3-3Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/><path d="M15 2a3 3 0 0 1 3 3v.2A3 3 0 0 1 20 8v1a3 3 0 0 1 0 6v1a3 3 0 0 1-2 2.8V19a3 3 0 0 1-3 3 2 2 0 0 1-2-2V5a3 3 0 0 1 3-3Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>' },
+  database: { viewBox: "0 0 24 24", body: '<ellipse cx="12" cy="5" rx="8" ry="3" stroke="currentColor" stroke-width="2" fill="none"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" stroke="currentColor" stroke-width="2" fill="none"/>' },
+  key: { viewBox: "0 0 24 24", body: '<circle cx="8" cy="15" r="4" stroke="currentColor" stroke-width="2" fill="none"/><path d="m10.8 12.2 8.7-8.7M16 6l2.5 2.5M19 3l2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>' },
+  link: { viewBox: "0 0 24 24", body: '<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>' },
+  code: { viewBox: "0 0 24 24", body: '<path d="m8 6-6 6 6 6M16 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' },
+  file: { viewBox: "0 0 24 24", body: '<path d="M6 2h9l5 5v15H6Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><path d="M15 2v5h5" stroke="currentColor" stroke-width="2" fill="none"/>' },
+  cloudArrow: { viewBox: "0 0 24 24", body: '<path d="M7 18a4 4 0 1 1 1-7.9A5.5 5.5 0 0 1 18.5 12 3.5 3.5 0 0 1 18 19H7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>' },
+  handle: { viewBox: "0 0 24 24", body: '<circle cx="9" cy="6" r="1.3" fill="currentColor"/><circle cx="9" cy="12" r="1.3" fill="currentColor"/><circle cx="9" cy="18" r="1.3" fill="currentColor"/><circle cx="15" cy="6" r="1.3" fill="currentColor"/><circle cx="15" cy="12" r="1.3" fill="currentColor"/><circle cx="15" cy="18" r="1.3" fill="currentColor"/>' },
+  bolt: { viewBox: "0 0 24 24", body: '<path d="M13 2 4 14h6l-1 8 9-12h-6Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>' },
+  eye: { viewBox: "0 0 24 24", body: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/>' },
+  eyeSlash: { viewBox: "0 0 24 24", body: '<path d="M3 3l18 18M10.6 5.2A11 11 0 0 1 12 5c7 0 11 7 11 7a13.6 13.6 0 0 1-3.2 3.9M6.5 6.6A13.7 13.7 0 0 0 1 12s4 7 11 7a10.6 10.6 0 0 0 4.2-.9M9.9 10a3 3 0 0 0 4.2 4.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' },
+  robot: { viewBox: "0 0 24 24", body: '<rect x="4" y="8" width="16" height="12" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 8V4m-3 0h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="14" r="1.3" fill="currentColor"/><circle cx="15" cy="14" r="1.3" fill="currentColor"/>' },
+  wikipedia: { viewBox: "0 0 24 24", body: '<path d="M4 4h6v2H8l4 12 3-9-1-3h-1V4h6v2h-1l-5 14h-2L7 8 5 6H4Z" stroke="currentColor" stroke-width="0.6" fill="currentColor"/>' },
 };
 
-/** name -> Promise<{viewBox, body}> (resolved SVG content, cached forever per session) */
 const resolvedCache = new Map();
-/** name -> list of pending DOM nodes waiting to be hydrated once resolved */
 const pendingNodes = new Map();
 
 function parseSvgText(text) {
@@ -151,17 +163,14 @@ async function fetchCandidate(fileName) {
 
 async function resolveIcon(name) {
   if (resolvedCache.has(name)) return resolvedCache.get(name);
-
   const promise = (async () => {
     const candidates = ICON_CANDIDATES[name] || [];
     for (const fileName of candidates) {
       const result = await fetchCandidate(fileName);
       if (result) return result;
     }
-    // network exhausted (or offline / not yet cached) -> local fallback
     return FALLBACK[name] || FALLBACK.circleInfo;
   })();
-
   resolvedCache.set(name, promise);
   const result = await promise;
   hydrateWaiters(name, result);
@@ -176,31 +185,21 @@ function hydrateWaiters(name, result) {
   const nodes = pendingNodes.get(name);
   if (!nodes) return;
   for (const node of nodes) {
-    if (node.isConnected) {
-      node.innerHTML = buildSvgMarkup(result);
-    }
+    if (node.isConnected) node.innerHTML = buildSvgMarkup(result);
   }
   pendingNodes.delete(name);
 }
 
-/**
- * Creates a ready-to-insert icon element. Renders instantly with whatever is
- * already resolved (cache or fallback), then upgrades in place once the real
- * Gravity UI asset finishes loading, with zero layout shift (fixed box size
- * is controlled entirely by CSS, not by the SVG's own dimensions).
- *
- * @param {string} name semantic icon key (see ICON_CANDIDATES)
- * @param {object} opts { size: 14|16|18|20|22|24|28, className }
- */
+function enforceSize(el, size) {
+  el.style.width = `${size}px`;
+  el.style.height = `${size}px`;
+}
+
 export function icon(name, opts = {}) {
   const size = opts.size || 18;
   const span = document.createElement("span");
   span.className = `icon-box icon-${size}${opts.className ? " " + opts.className : ""}`;
-  // Belt-and-suspenders: enforce the exact pixel box via inline style too, so
-  // sizing is correct even for a `size` value that has no matching CSS class
-  // (e.g. a one-off like 15px) — icons can never render oversized/undersized.
-  span.style.width = `${size}px`;
-  span.style.height = `${size}px`;
+  enforceSize(span, size);
   span.setAttribute("aria-hidden", "true");
   span.dataset.iconName = name;
 
@@ -209,8 +208,6 @@ export function icon(name, opts = {}) {
       span.innerHTML = buildSvgMarkup(result);
     });
   } else {
-    // Paint the local fallback immediately so there's never an empty box,
-    // then swap to the real Gravity UI asset the instant it resolves.
     span.innerHTML = buildSvgMarkup(FALLBACK[name] || FALLBACK.circleInfo);
     if (!pendingNodes.has(name)) pendingNodes.set(name, []);
     pendingNodes.get(name).push(span);
@@ -219,28 +216,21 @@ export function icon(name, opts = {}) {
   return span;
 }
 
-/** Returns an HTML string (for template literals) that will self-hydrate once mountIcons() runs. */
 export function iconPlaceholder(name, opts = {}) {
   const size = opts.size || 18;
   return `<span class="icon-box icon-${size}${opts.className ? " " + opts.className : ""}" style="width:${size}px;height:${size}px" data-icon="${name}" aria-hidden="true"></span>`;
 }
 
-/** Scans a root element for [data-icon] placeholders (from iconPlaceholder/innerHTML templates) and hydrates them. */
 export function mountIcons(root = document) {
   const nodes = root.querySelectorAll("[data-icon]");
   nodes.forEach((node) => {
     const name = node.dataset.icon;
     node.dataset.iconName = name;
     delete node.dataset.icon;
-    // Guarantee correct sizing even for hand-written markup (e.g. index.html
-    // nav icons) that only set a class and not an inline size.
     if (!node.style.width) {
       const sizeClass = [...node.classList].find((c) => /^icon-\d+$/.test(c));
-      if (sizeClass) {
-        const px = sizeClass.split("-")[1];
-        node.style.width = `${px}px`;
-        node.style.height = `${px}px`;
-      }
+      const px = sizeClass ? sizeClass.split("-")[1] : "18";
+      enforceSize(node, px);
     }
     if (resolvedCache.has(name)) {
       resolvedCache.get(name).then((result) => {
@@ -255,9 +245,6 @@ export function mountIcons(root = document) {
   });
 }
 
-/** Kick off fetching every icon the app uses, right away, so the pack is
- *  warm in cache before the user opens any secondary view. Safe to call
- *  multiple times; each name is only ever fetched once per session. */
 export function preloadAllIcons() {
   Object.keys(ICON_CANDIDATES).forEach((name) => resolveIcon(name));
 }

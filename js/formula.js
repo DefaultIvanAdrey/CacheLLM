@@ -29,15 +29,10 @@ export class FormulaError extends Error {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/* Card resolution helpers                                             */
-/* ------------------------------------------------------------------ */
-
 function normalize(str) {
   return String(str ?? "").trim().toLowerCase();
 }
 
-/** Finds a card by exact id first, then by case-insensitive title match. */
 function findCard(board, ref) {
   if (!ref) return null;
   const byId = board.cards.find((c) => c.id === ref);
@@ -53,10 +48,6 @@ function findColumn(board, ref) {
   const norm = normalize(ref);
   return board.columns.find((c) => normalize(c.title) === norm) || null;
 }
-
-/* ------------------------------------------------------------------ */
-/* Public entry point: evaluate a card's raw content -> display string */
-/* ------------------------------------------------------------------ */
 
 export function evaluateCardContent(board, card, opts = {}) {
   const stack = opts.stack || [];
@@ -90,7 +81,6 @@ function stringifyResult(v) {
   return String(v);
 }
 
-/** Replace every {{ref}} occurrence in plain text with the resolved card value. */
 export function resolveInline(text, board, stack) {
   return String(text ?? "").replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, ref) => {
     const target = findCard(board, ref.trim());
@@ -98,10 +88,6 @@ export function resolveInline(text, board, stack) {
     return evaluateCardContent(board, target, { stack });
   });
 }
-
-/* ------------------------------------------------------------------ */
-/* Tokenizer                                                            */
-/* ------------------------------------------------------------------ */
 
 const TOKEN_RE =
   /\s*({{\s*[^{}]+?\s*}}|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|<=|>=|==|!=|&&|\|\||[()&+\-*/,<>])\s*/y;
@@ -126,10 +112,6 @@ function tokenize(src) {
   return tokens;
 }
 
-/* ------------------------------------------------------------------ */
-/* Recursive-descent parser + evaluator (Pratt-ish for binary ops)     */
-/* ------------------------------------------------------------------ */
-
 class Parser {
   constructor(tokens, board, stack) {
     this.tokens = tokens;
@@ -149,11 +131,9 @@ class Parser {
     }
     return this.next();
   }
-
   parseExpression() {
     return this.parseComparison();
   }
-
   parseComparison() {
     let left = this.parseConcat();
     while (["==", "!=", "<", ">", "<=", ">="].includes(this.peek())) {
@@ -163,7 +143,6 @@ class Parser {
     }
     return left;
   }
-
   parseConcat() {
     let left = this.parseAdditive();
     while (this.peek() === "&") {
@@ -173,7 +152,6 @@ class Parser {
     }
     return left;
   }
-
   parseAdditive() {
     let left = this.parseMultiplicative();
     while (this.peek() === "+" || this.peek() === "-") {
@@ -183,7 +161,6 @@ class Parser {
     }
     return left;
   }
-
   parseMultiplicative() {
     let left = this.parseUnary();
     while (this.peek() === "*" || this.peek() === "/") {
@@ -198,7 +175,6 @@ class Parser {
     }
     return left;
   }
-
   parseUnary() {
     if (this.peek() === "-") {
       this.next();
@@ -210,31 +186,23 @@ class Parser {
     }
     return this.parsePrimary();
   }
-
   parsePrimary() {
     const tok = this.peek();
     if (tok === undefined) throw new FormulaError("SYNTAX", "Unexpected end of formula");
-
     if (tok === "(") {
       this.next();
       const val = this.parseExpression();
       this.expect(")");
       return val;
     }
-
-    // string literal
     if (/^".*"$/.test(tok) || /^'.*'$/.test(tok)) {
       this.next();
       return tok.slice(1, -1).replace(/\\(.)/g, "$1");
     }
-
-    // number literal
     if (/^\d+(\.\d+)?$/.test(tok)) {
       this.next();
       return parseFloat(tok);
     }
-
-    // inline {{ref}} literal
     if (/^\{\{/.test(tok)) {
       this.next();
       const ref = tok.replace(/^\{\{\s*/, "").replace(/\s*\}\}$/, "");
@@ -243,8 +211,6 @@ class Parser {
       const val = evaluateCardContent(this.board, target, { stack: this.stack });
       return maybeNumeric(val);
     }
-
-    // identifier: function call, or bare TRUE/FALSE
     if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(tok)) {
       this.next();
       if (this.peek() === "(") {
@@ -252,15 +218,12 @@ class Parser {
       }
       if (tok.toUpperCase() === "TRUE") return true;
       if (tok.toUpperCase() === "FALSE") return false;
-      // Bare word: treat as a card title lookup for convenience, else literal string
       const target = findCard(this.board, tok);
       if (target) return maybeNumeric(evaluateCardContent(this.board, target, { stack: this.stack }));
       return tok;
     }
-
     throw new FormulaError("SYNTAX", `Unexpected token '${tok}'`);
   }
-
   parseArgs() {
     const args = [];
     if (this.peek() !== ")") {
@@ -273,7 +236,6 @@ class Parser {
     this.expect(")");
     return args;
   }
-
   parseCall(name) {
     this.expect("(");
     const args = this.parseArgs();
@@ -326,10 +288,6 @@ function maybeNumeric(v) {
   }
   return v;
 }
-
-/* ------------------------------------------------------------------ */
-/* Built-in functions                                                   */
-/* ------------------------------------------------------------------ */
 
 function callFunction(name, args, board, stack) {
   switch (name) {
@@ -399,8 +357,6 @@ function callFunction(name, args, board, stack) {
   }
 }
 
-/* ------------------------------------------------------------------ */
-
 export function evaluateFormula(src, board, stack) {
   const tokens = tokenize(src);
   const parser = new Parser(tokens, board, stack);
@@ -411,7 +367,6 @@ export function evaluateFormula(src, board, stack) {
   return result;
 }
 
-/** Extract the list of card ids/titles a given raw content string depends on (for graph/debug UI). */
 export function extractReferences(content) {
   const refs = new Set();
   const re = /\{\{\s*([^{}]+?)\s*\}\}/g;

@@ -1,11 +1,6 @@
 /**
- * modelpicker.js
- * A searchable, sortable, filterable modal for choosing a WebLLM model —
- * replaces a plain <select>, which doesn't scale to WebLLM's 100+ model
- * catalog. Supports:
- *   - free-text search (name, family, quantization, parameter size)
- *   - sort: recommended-first, name A-Z/Z-A, size smallest/largest
- *   - filter chips: family, "fits my device only"
+ * modelpicker.js — searchable/sortable/filterable modal for choosing a
+ * WebLLM model (the catalog is too large for a plain <select>).
  */
 import { icon } from "./icons.js";
 import { extractFamily, extractQuant, extractParamSize, formatSizeMB, searchModels, sortModels, filterModels, SORT_MODES } from "./modelutils.js";
@@ -14,14 +9,7 @@ export function openModelPicker({ modelList, device, recommendation, currentSele
   const recIds = new Set(
     [recommendation?.primary?.model_id, ...(recommendation?.alternatives || []).map((m) => m.model_id)].filter(Boolean)
   );
-
-  const state = {
-    query: "",
-    sort: "recommended",
-    families: new Set(),
-    fitsOnly: false,
-  };
-
+  const state = { query: "", sort: "recommended", families: new Set(), fitsOnly: false };
   const families = [...new Set(modelList.map((m) => extractFamily(m.model_id)))].sort();
 
   const overlay = document.createElement("div");
@@ -35,11 +23,9 @@ export function openModelPicker({ modelList, device, recommendation, currentSele
       <div class="mp-search-row">
         <div class="search-field">
           <span id="mpSearchIcon"></span>
-          <input type="text" id="mpSearchInput" placeholder="Search by name, family, size (e.g. \"qwen 3b\")…" />
+          <input type="text" id="mpSearchInput" placeholder='Search by name, family, size (e.g. "qwen 3b")…' />
         </div>
-        <select id="mpSortSelect">
-          ${Object.entries(SORT_MODES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}
-        </select>
+        <select id="mpSortSelect">${Object.entries(SORT_MODES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
       </div>
       <div class="mp-filters" id="mpFilters"></div>
       <div class="mp-results-meta" id="mpResultsMeta"></div>
@@ -55,10 +41,8 @@ export function openModelPicker({ modelList, device, recommendation, currentSele
   const filtersEl = overlay.querySelector("#mpFilters");
   const listEl = overlay.querySelector("#mpList");
   const metaEl = overlay.querySelector("#mpResultsMeta");
-
   sortSelect.value = state.sort;
 
-  // Filter chips: "Fits my device" + top families (cap to avoid overflow; rest still searchable)
   const fitsChip = document.createElement("button");
   fitsChip.type = "button";
   fitsChip.className = "chip";
@@ -111,7 +95,6 @@ export function openModelPicker({ modelList, device, recommendation, currentSele
       const paramSize = extractParamSize(m.model_id);
       const fits = (m.vram_required_MB || 0) <= device.budgetMB;
       const isRec = recIds.has(m.model_id);
-
       row.innerHTML = `
         <div class="mp-main">
           <div class="mp-name">${escapeHtml(m.model_id)}</div>
@@ -141,7 +124,6 @@ export function openModelPicker({ modelList, device, recommendation, currentSele
     state.sort = sortSelect.value;
     render();
   });
-
   overlay.querySelector("#mpClose").addEventListener("click", () => overlay.remove());
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) overlay.remove();

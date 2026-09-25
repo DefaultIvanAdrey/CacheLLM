@@ -1,45 +1,35 @@
 /**
  * kanban.js
- * Renders and manages the "memory" Kanban board: columns, cards, formula
- * previews, card editor modal, and touch-friendly drag & drop for BOTH
- * cards (within/between columns) and whole columns (reordering), built on
- * the Pointer Events API rather than HTML5 DnD, since HTML5 drag-and-drop
- * does not work reliably on mobile touchscreens.
+ * Renders and manages the "memory" Kanban board: columns, cards (with a
+ * dedicated drag HANDLE so tapping/opening a card on mobile never
+ * accidentally starts a drag), formula previews, file/image attachments,
+ * and touch-friendly drag & drop for both cards and whole columns.
  */
 import { evaluateCardContent, extractReferences } from "./formula.js";
 import { genId, exportBoardToFile, importBoardFromFile } from "./storage.js";
 import { iconPlaceholder, icon, mountIcons } from "./icons.js";
+import { processFile, formatFileSize } from "./attachments.js";
 
 const COLUMN_PALETTE = [
-  "var(--col-identity)",
-  "var(--col-context)",
-  "var(--col-instructions)",
-  "var(--col-archive)",
-  "#d946ef",
-  "#f59e0b",
-  "#14b8a6",
+  "var(--col-identity)", "var(--col-context)", "var(--col-instructions)", "var(--col-archive)",
+  "#d946ef", "#f59e0b", "#14b8a6",
 ];
 
 export class KanbanBoard {
-  /**
-   * @param {HTMLElement} root
-   * @param {object} opts { getBoard, setBoard, onToast }
-   */
   constructor(root, opts) {
     this.root = root;
     this.getBoard = opts.getBoard;
     this.setBoard = opts.setBoard;
     this.onToast = opts.onToast || (() => {});
     this.filter = "";
-    this.drag = null; // active card-drag state
-    this.colDrag = null; // active column-drag state
+    this.drag = null;
+    this.colDrag = null;
     this._bindGlobalPointerHandlers();
   }
 
   board() {
     return this.getBoard();
   }
-
   async persist() {
     await this.setBoard(this.board());
   }
@@ -200,30 +190,49 @@ export class KanbanBoard {
     const evaluated = evaluateCardContent(board, card);
     const isError = /^#(REF|ERROR)!/.test(evaluated);
     const refs = extractReferences(card.content);
+    const attachments = card.attachments || [];
 
-    el.innerHTML = `
+    const handle = document.createElement("div");
+    handle.className = "kcard-handle";
+    handle.title = "Drag to move this card";
+    handle.appendChild(icon("handle", { size: 15 }));
+    handle.addEventListener("pointerdown", (e) => this._onCardPointerDown(e, el, card));
+    el.appendChild(handle);
+
+    const main = document.createElement("div");
+    main.className = "kcard-main";
+    main.innerHTML = `
       <div class="kcard-title-row">
         <div class="kcard-title">${escapeHtml(card.title || "Untitled")}</div>
         <div class="kcard-badges">${isFormula ? `<span class="badge accent">fx</span>` : ""}</div>
       </div>
       <div class="kcard-content ${isError ? "formula-error" : ""}">${escapeHtml(evaluated) || "<em>(empty)</em>"}</div>
       ${refs.length ? `<div class="kcard-footer"><span class="kcard-refs">↳ refs: ${refs.map(escapeHtml).join(", ")}</span></div>` : ""}
+      ${
+        attachments.length
+          ? `<div class="kcard-attachments">${attachments
+              .map((a) =>
+                a.kind === "image"
+                  ? `<img class="kcard-attach-thumb" src="${a.dataUrl}" alt="${escapeAttr(a.name)}" title="${escapeAttr(a.name)}"/>`
+                  : `<span class="kcard-attach-file" title="${escapeAttr(a.name)}"></span>`
+              )
+              .join("")}</div>`
+          : ""
+      }
     `;
+    main.querySelectorAll(".kcard-attach-file").forEach((elx) => elx.appendChild(icon("file", { size: 14 })));
 
-    el.addEventListener("click", () => {
+    main.addEventListener("click", () => {
       if (this._suppressClick) {
         this._suppressClick = false;
         return;
       }
       this.openCardEditor(card.id, card.columnId);
     });
-
-    el.addEventListener("pointerdown", (e) => this._onCardPointerDown(e, el, card));
+    el.appendChild(main);
 
     return el;
   }
-
-  /* ------------------------------- Drag & Drop (Pointer Events) ------------------------------- */
 
   _bindGlobalPointerHandlers() {
     window.addEventListener("pointermove", (e) => {
@@ -240,20 +249,10 @@ export class KanbanBoard {
     });
   }
 
-  /* ---- Card drag ---- */
-
   _onCardPointerDown(e, el, card) {
     if (e.button !== undefined && e.button !== 0) return;
-    this.drag = {
-      pointerId: e.pointerId,
-      cardId: card.id,
-      startX: e.clientX,
-      startY: e.clientY,
-      moved: false,
-      sourceEl: el,
-      placeholder: null,
-      clone: null,
-    };
+    e.preventDefault();
+    this.drag = { pointerId: e.pointerId, cardId: card.id, startX: e.clientX, startY: e.clientY, moved: false, sourceEl: el, placeholder: null, clone: null };
   }
 
   _onPointerMove(e) {
@@ -261,7 +260,7 @@ export class KanbanBoard {
     if (!d || d.pointerId !== e.pointerId) return;
     const dx = e.clientX - d.startX;
     const dy = e.clientY - d.startY;
-    if (!d.moved && Math.hypot(dx, dy) < 8) return;
+    if (!d.moved && Math.hypot(dx, dy) < 6) return;
 
     if (!d.moved) {
       d.moved = true;
@@ -306,12 +305,10 @@ export class KanbanBoard {
     const d = this.drag;
     if (!d || d.pointerId !== e.pointerId) return;
     this.drag = null;
-
-    if (!d.moved) return; // was a simple tap; click handler already handles edit
+    if (!d.moved) return;
 
     const targetBody = d.placeholder.parentElement;
     const targetColumnId = targetBody ? targetBody.dataset.columnId : null;
-
     const board = this.board();
     const card = board.cards.find((c) => c.id === d.cardId);
     if (!card || !targetColumnId) {
@@ -325,7 +322,6 @@ export class KanbanBoard {
       .map((n) => (n === d.placeholder ? "__PLACEHOLDER__" : n.dataset.cardId));
 
     card.columnId = targetColumnId;
-
     const withoutCard = board.cards.filter((c) => c.id !== card.id);
     const idx = siblingIds.indexOf("__PLACEHOLDER__");
     const targetColumnCardIdsInOrder = siblingIds.filter((id) => id !== "__PLACEHOLDER__");
@@ -346,30 +342,16 @@ export class KanbanBoard {
 
     d.clone && d.clone.remove();
     d.placeholder && d.placeholder.remove();
-
     await this.persist();
     this.renderColumns();
   }
-
-  /* ---- Column drag (reordering whole columns) ---- */
 
   _onColumnPointerDown(e, colEl, col) {
     if (e.button !== undefined && e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     const rect = colEl.getBoundingClientRect();
-    this.colDrag = {
-      pointerId: e.pointerId,
-      columnId: col.id,
-      startX: e.clientX,
-      startY: e.clientY,
-      moved: false,
-      sourceEl: colEl,
-      placeholder: null,
-      clone: null,
-      width: rect.width,
-      height: rect.height,
-    };
+    this.colDrag = { pointerId: e.pointerId, columnId: col.id, startX: e.clientX, startY: e.clientY, moved: false, sourceEl: colEl, placeholder: null, clone: null, width: rect.width, height: rect.height };
   }
 
   _onColumnPointerMove(e) {
@@ -382,7 +364,6 @@ export class KanbanBoard {
     if (!d.moved) {
       d.moved = true;
       const rect = d.sourceEl.getBoundingClientRect();
-
       d.placeholder = document.createElement("div");
       d.placeholder.className = "column-ghost";
       d.placeholder.style.width = `${rect.width}px`;
@@ -419,7 +400,6 @@ export class KanbanBoard {
     const d = this.colDrag;
     if (!d || d.pointerId !== e.pointerId) return;
     this.colDrag = null;
-
     if (!d.moved) return;
 
     d.placeholder.replaceWith(d.sourceEl);
@@ -427,27 +407,23 @@ export class KanbanBoard {
     d.sourceEl.style.pointerEvents = "";
     d.clone && d.clone.remove();
 
-    const orderedIds = [...this.columnsEl.children]
-      .filter((n) => n.classList.contains("column"))
-      .map((n) => n.dataset.columnId);
-
+    const orderedIds = [...this.columnsEl.children].filter((n) => n.classList.contains("column")).map((n) => n.dataset.columnId);
     const board = this.board();
     const byId = new Map(board.columns.map((c) => [c.id, c]));
     board.columns = orderedIds.map((id) => byId.get(id)).filter(Boolean);
-
     await this.persist();
     this.renderColumns();
   }
-
-  /* ------------------------------------- Card editor modal ------------------------------------- */
 
   openCardEditor(cardId, defaultColumnId) {
     const board = this.board();
     const isNew = !cardId;
     const card = isNew
-      ? { id: genId("card"), columnId: defaultColumnId, title: "", content: "", createdAt: Date.now(), updatedAt: Date.now() }
+      ? { id: genId("card"), columnId: defaultColumnId, title: "", content: "", createdAt: Date.now(), updatedAt: Date.now(), attachments: [] }
       : board.cards.find((c) => c.id === cardId);
     if (!card) return;
+    if (!card.attachments) card.attachments = [];
+    const workingAttachments = [...card.attachments];
 
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
@@ -471,6 +447,12 @@ export class KanbanBoard {
             <div class="formula-preview" id="cardPreview"></div>
           </div>
           <div>
+            <label>Attachments</label>
+            <div class="attachment-row" id="cardAttachmentRow"></div>
+            <button class="btn sm" id="cardAttachBtn" style="margin-top:8px;">${iconPlaceholder("paperclip", { size: 13 })}<span>Attach image or file</span></button>
+            <input type="file" id="cardAttachInput" class="hidden" multiple accept="image/*,.pdf,.docx,.txt,.md,.csv,.json" />
+          </div>
+          <div>
             <label>Column</label>
             <select id="cardColumnSelect">
               ${board.columns.map((c) => `<option value="${c.id}" ${c.id === card.columnId ? "selected" : ""}>${escapeHtml(c.title)}</option>`).join("")}
@@ -479,7 +461,8 @@ export class KanbanBoard {
           <div class="hint">
             Reference another card anywhere with <code>{{Card Title}}</code>. Start with <code>=</code> for a full formula,
             e.g. <code>=IF({{Age}}&gt;18,"adult","minor")</code>. Functions: CONCAT, JOIN, UPPER, LOWER, TRIM, LEN, IF, SUM, AVG,
-            MIN, MAX, ROUND, TODAY, NOW, CARD(id), CARDS_IN(column), COUNT_IN(column).
+            MIN, MAX, ROUND, TODAY, NOW, CARD(id), CARDS_IN(column), COUNT_IN(column). Attached documents/images are made
+            available to the assistant as extra context when this card's column feeds into the prompt.
           </div>
         </div>
         <div class="modal-footer">
@@ -498,6 +481,42 @@ export class KanbanBoard {
     const contentInput = overlay.querySelector("#cardContentInput");
     const preview = overlay.querySelector("#cardPreview");
     const columnSelect = overlay.querySelector("#cardColumnSelect");
+    const attachRow = overlay.querySelector("#cardAttachmentRow");
+    const attachInput = overlay.querySelector("#cardAttachInput");
+
+    const renderAttachments = () => {
+      attachRow.innerHTML = "";
+      workingAttachments.forEach((att, idx) => {
+        const chip = document.createElement("div");
+        chip.className = "attachment-chip" + (att.error ? " warn" : "");
+        const thumbOrIcon =
+          att.kind === "image"
+            ? `<img class="thumb" src="${att.dataUrl}" alt=""/>`
+            : `<span class="file-icon">${iconPlaceholder("file", { size: 13 })}</span>`;
+        chip.innerHTML = `${thumbOrIcon}<span class="name" title="${escapeAttr(att.name)}">${escapeHtml(att.name)}</span><button type="button" class="remove-btn" data-idx="${idx}">${iconPlaceholder("close", { size: 12 })}</button>`;
+        attachRow.appendChild(chip);
+      });
+      mountIcons(attachRow);
+      attachRow.querySelectorAll(".remove-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          workingAttachments.splice(Number(btn.dataset.idx), 1);
+          renderAttachments();
+        });
+      });
+    };
+    renderAttachments();
+
+    overlay.querySelector("#cardAttachBtn").addEventListener("click", () => attachInput.click());
+    attachInput.addEventListener("change", async () => {
+      const files = [...attachInput.files];
+      attachInput.value = "";
+      for (const file of files) {
+        const processed = await processFile(file);
+        workingAttachments.push(processed);
+        renderAttachments();
+        if (processed.error) this.onToast(`"${file.name}": ${processed.error}`, "error");
+      }
+    });
 
     const updatePreview = () => {
       const tempBoard = {
@@ -526,6 +545,7 @@ export class KanbanBoard {
       card.title = titleInput.value.trim() || "Untitled";
       card.content = contentInput.value;
       card.columnId = columnSelect.value;
+      card.attachments = workingAttachments;
       card.updatedAt = Date.now();
       const b = this.board();
       if (isNew) {

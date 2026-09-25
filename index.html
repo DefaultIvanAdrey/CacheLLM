@@ -6,7 +6,6 @@
 <title>Memory — On-Device AI Kanban</title>
 <meta name="description" content="A mobile-native, fully offline PWA that runs an LLM in your browser via WebLLM, with a spreadsheet-formula-capable Kanban memory board." />
 
-<!-- PWA -->
 <link rel="manifest" href="manifest.webmanifest" />
 <meta name="theme-color" content="#fafaf9" />
 <meta name="mobile-web-app-capable" content="yes" />
@@ -30,16 +29,13 @@
     </div>
 
     <button class="nav-item active" data-route="chat" type="button">
-      <span class="icon-box icon-20" data-icon="chat"></span>
-      <span>Chat</span>
+      <span class="icon-box icon-20" data-icon="chat"></span><span>Chat</span>
     </button>
     <button class="nav-item" data-route="board" type="button">
-      <span class="icon-box icon-20" data-icon="columns"></span>
-      <span>Memory Board</span>
+      <span class="icon-box icon-20" data-icon="columns"></span><span>Memory Board</span>
     </button>
     <button class="nav-item" data-route="settings" type="button">
-      <span class="icon-box icon-20" data-icon="gear"></span>
-      <span>Settings</span>
+      <span class="icon-box icon-20" data-icon="gear"></span><span>Settings</span>
     </button>
 
     <div class="sidebar-footer">
@@ -47,7 +43,7 @@
         <span class="dot" id="statusDot"></span>
         <span id="statusText">Checking device…</span>
       </div>
-      <div style="padding:2px 10px;">On-device · offline-capable · your data never leaves this device.</div>
+      <div style="padding:2px 10px;">On-device by default · offline-capable · your data never leaves this device unless you enable a remote model.</div>
     </div>
   </aside>
   <div class="sidebar-scrim" id="sidebarScrim"></div>
@@ -57,9 +53,7 @@
       <button class="btn icon menu-btn" id="menuBtn" type="button" aria-label="Menu">
         <span class="icon-box icon-20" data-icon="menu"></span>
       </button>
-      <div class="brand">
-        <span class="view-title" id="viewTitle">Chat</span>
-      </div>
+      <div class="brand"><span class="view-title" id="viewTitle">Chat</span></div>
     </div>
     <div class="topbar-right">
       <button class="btn icon theme-toggle" id="themeToggle" type="button" aria-label="Toggle theme" title="Toggle theme"></button>
@@ -70,16 +64,13 @@
 
   <nav class="tabbar" id="tabbar">
     <button class="tabbar-item active" data-route="chat" type="button">
-      <span class="icon-box icon-20" data-icon="chat"></span>
-      <span>Chat</span>
+      <span class="icon-box icon-20" data-icon="chat"></span><span>Chat</span>
     </button>
     <button class="tabbar-item" data-route="board" type="button">
-      <span class="icon-box icon-20" data-icon="columns"></span>
-      <span>Board</span>
+      <span class="icon-box icon-20" data-icon="columns"></span><span>Board</span>
     </button>
     <button class="tabbar-item" data-route="settings" type="button">
-      <span class="icon-box icon-20" data-icon="gear"></span>
-      <span>Settings</span>
+      <span class="icon-box icon-20" data-icon="gear"></span><span>Settings</span>
     </button>
   </nav>
 

@@ -1,43 +1,19 @@
 /**
- * modelutils.js
- * Shared helpers for organizing WebLLM's model list: family/quantization
- * extraction, formatting, searching, sorting and filtering. Used by
- * modelpicker.js (and available to any other view that needs to reason
- * about the model catalog).
+ * modelutils.js — model family/quant/size parsing + search/sort/filter helpers.
  */
-
-// Known model family keywords, checked in order (longer/more specific first
-// so e.g. "TinyLlama" wins over the generic "Llama" substring).
 const FAMILY_KEYWORDS = [
-  "TinyLlama",
-  "Llama",
-  "Qwen",
-  "Phi",
-  "Gemma",
-  "Mistral",
-  "Mixtral",
-  "SmolLM",
-  "RedPajama",
-  "StableLM",
-  "WizardMath",
-  "Hermes",
-  "DeepSeek",
-  "Snowflake",
-  "GPT",
+  "TinyLlama", "Llama", "Qwen", "Phi", "Gemma", "Mistral", "Mixtral", "SmolLM",
+  "RedPajama", "StableLM", "WizardMath", "Hermes", "DeepSeek", "Snowflake", "GPT",
 ];
 
 export function extractFamily(modelId) {
   for (const kw of FAMILY_KEYWORDS) {
     if (modelId.toLowerCase().includes(kw.toLowerCase())) return kw;
   }
-  // fall back to the first hyphen-delimited segment
-  const seg = modelId.split("-")[0];
-  return seg || "Other";
+  return modelId.split("-")[0] || "Other";
 }
 
-// Matches common WebLLM quantization suffixes like q4f16_1, q4f32_1, q0f16, q0f32
 const QUANT_RE = /q\d+f(?:16|32)(?:_\d+)?/i;
-
 export function extractQuant(modelId) {
   const m = modelId.match(QUANT_RE);
   return m ? m[0].toLowerCase() : "unknown";
@@ -48,7 +24,16 @@ export function formatSizeMB(mb) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
 }
 
-/** Rough parameter-count guess parsed straight from the model id, e.g. "3B", "0.5B", "8x7B". */
+export function formatBytes(bytes) {
+  if (!bytes && bytes !== 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
+}
+
 export function extractParamSize(modelId) {
   const m = modelId.match(/(\d+(?:\.\d+)?)(x\d+)?[bB](?![a-zA-Z])/);
   if (!m) return null;

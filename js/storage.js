@@ -1,7 +1,7 @@
 /**
  * storage.js
- * Local persistence for the Kanban "memory" board, chat history, and app
- * settings. Uses IndexedDB (works fully offline, larger quota than
+ * Local persistence for conversations, the Kanban "memory" board, and app
+ * settings. Uses IndexedDB (offline-capable, larger quota than
  * localStorage) with a small promise wrapper. Also provides JSON
  * import/export of the whole memory board.
  */
@@ -15,9 +15,7 @@ function openDB() {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE);
-      }
+      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -44,23 +42,29 @@ async function idbSet(key, value) {
   });
 }
 
+async function idbDelete(key) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).delete(key);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 const BOARD_KEY = "memory-board";
 const SETTINGS_KEY = "app-settings";
-const CHAT_KEY = "chat-history";
+const CONVERSATIONS_KEY = "conversations-v2";
+const LEGACY_CHAT_KEY = "chat-history";
 
 export function defaultBoard() {
   const now = Date.now();
   const col = (id, title, inject = true) => ({ id, title, injectIntoPrompt: inject });
   const card = (id, columnId, title, content) => ({
-    id,
-    columnId,
-    title,
-    content,
-    createdAt: now,
-    updatedAt: now,
+    id, columnId, title, content, createdAt: now, updatedAt: now, attachments: [],
   });
   return {
-    version: 1,
+    version: 2,
     boardName: "Assistant Memory",
     columns: [
       col("col-identity", "Identity"),
@@ -70,24 +74,25 @@ export function defaultBoard() {
     ],
     cards: [
       card("card-name", "col-identity", "Assistant Name", "Kai"),
-      card(
-        "card-persona",
-        "col-identity",
-        "Persona",
-        '=CONCAT("You are ", {{Assistant Name}}, ", a concise and friendly on-device assistant.")'
-      ),
+      card("card-persona", "col-identity", "Persona", '=CONCAT("You are ", {{Assistant Name}}, ", a concise and friendly on-device assistant.")'),
       card("card-user", "col-context", "User Preference", "Keep answers short unless asked to elaborate."),
-      card(
-        "card-system",
-        "col-instructions",
-        "System Prompt",
-        "={{Persona}} & \" \" & {{User Preference}}"
-      ),
+      card("card-system", "col-instructions", "System Prompt", '={{Persona}} & " " & {{User Preference}}'),
     ],
   };
 }
 
-/** Presets used by the beginner-friendly Generation settings UI. */
+export async function loadBoard() {
+  const stored = await idbGet(BOARD_KEY);
+  const board = stored || defaultBoard();
+  board.cards.forEach((c) => {
+    if (!c.attachments) c.attachments = [];
+  });
+  return board;
+}
+export async function saveBoard(board) {
+  await idbSet(BOARD_KEY, board);
+}
+
 export const GENERATION_PRESETS = {
   precise: { label: "Precise", temperature: 0.3, topP: 0.85, description: "Focused, consistent, sticks closely to facts. Good for Q&A, coding, summarizing." },
   balanced: { label: "Balanced", temperature: 0.8, topP: 0.95, description: "A sensible default — some variety without going off the rails." },
@@ -103,47 +108,84 @@ export const MAX_TOKENS_PRESETS = [
 
 export function defaultSettings() {
   return {
-    theme: "system", // 'light' | 'dark' | 'system'
+    theme: "system",
     selectedModelId: null,
     autoRecommend: true,
-    generationMode: "beginner", // 'beginner' | 'advanced'
-    activePreset: "balanced", // 'precise' | 'balanced' | 'creative' | 'custom'
+    generationMode: "beginner",
+    activePreset: "balanced",
     temperature: 0.8,
     topP: 0.95,
     frequencyPenalty: 0,
     presencePenalty: 0,
     maxTokens: 512,
+    deepThinking: true,
+    internetSearch: false,
+    activeProvider: "local",
+    remoteProviders: {
+      openai_compatible: { baseUrl: "", apiKey: "", model: "", presetKey: "custom" },
+      gemini: { apiKey: "", model: "gemini-2.5-flash" },
+    },
   };
-}
-
-export async function loadBoard() {
-  const stored = await idbGet(BOARD_KEY);
-  return stored || defaultBoard();
-}
-
-export async function saveBoard(board) {
-  await idbSet(BOARD_KEY, board);
 }
 
 export async function loadSettings() {
   const stored = await idbGet(SETTINGS_KEY);
-  return { ...defaultSettings(), ...(stored || {}) };
+  const merged = { ...defaultSettings(), ...(stored || {}) };
+  merged.remoteProviders = { ...defaultSettings().remoteProviders, ...(stored?.remoteProviders || {}) };
+  return merged;
 }
-
 export async function saveSettings(settings) {
   await idbSet(SETTINGS_KEY, settings);
 }
 
-export async function loadChatHistory() {
-  const stored = await idbGet(CHAT_KEY);
-  return stored || [];
+function genId(prefix) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-4)}`;
 }
 
-export async function saveChatHistory(messages) {
-  await idbSet(CHAT_KEY, messages);
+export function newConversation(title) {
+  const now = Date.now();
+  return { id: genId("conv"), title: title || "New chat", messages: [], createdAt: now, updatedAt: now };
 }
 
-/* -------------------------- Import / Export -------------------------- */
+export function deriveConversationTitle(conversation) {
+  const firstUser = conversation.messages.find((m) => m.role === "user");
+  if (!firstUser) return "New chat";
+  const text = (typeof firstUser.content === "string" ? firstUser.content : "").trim();
+  if (!text) return "New chat";
+  return text.length > 42 ? text.slice(0, 42) + "…" : text;
+}
+
+async function migrateLegacyChatHistory() {
+  const legacy = await idbGet(LEGACY_CHAT_KEY);
+  if (!legacy || !Array.isArray(legacy) || !legacy.length) return null;
+  const conv = newConversation();
+  conv.messages = legacy.map((m) => ({ id: genId("msg"), role: m.role, content: m.content, attachments: [], at: m.at || Date.now() }));
+  conv.title = deriveConversationTitle(conv);
+  conv.updatedAt = Date.now();
+  return conv;
+}
+
+export async function loadConversations() {
+  let stored = await idbGet(CONVERSATIONS_KEY);
+  if (!stored) {
+    const migrated = await migrateLegacyChatHistory();
+    const initial = migrated ? [migrated] : [newConversation()];
+    stored = { conversations: initial, activeId: initial[0].id };
+    await idbSet(CONVERSATIONS_KEY, stored);
+    await idbDelete(LEGACY_CHAT_KEY);
+  }
+  stored.conversations.forEach((c) => {
+    c.messages.forEach((m) => {
+      if (!m.attachments) m.attachments = [];
+      if (!m.id) m.id = genId("msg");
+    });
+  });
+  return stored;
+}
+
+export async function saveConversations(state) {
+  await idbSet(CONVERSATIONS_KEY, state);
+}
 
 export function exportBoardToFile(board) {
   const blob = new Blob([JSON.stringify(board, null, 2)], { type: "application/json" });
@@ -167,6 +209,9 @@ export function importBoardFromFile(file) {
         if (!parsed || !Array.isArray(parsed.columns) || !Array.isArray(parsed.cards)) {
           throw new Error("File does not look like a valid memory board export (missing columns/cards).");
         }
+        parsed.cards.forEach((c) => {
+          if (!c.attachments) c.attachments = [];
+        });
         resolve(parsed);
       } catch (err) {
         reject(err);
@@ -177,6 +222,4 @@ export function importBoardFromFile(file) {
   });
 }
 
-export function genId(prefix) {
-  return `${prefix}-${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-4)}`;
-}
+export { genId };

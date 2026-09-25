@@ -1,16 +1,12 @@
 /**
  * llm.js
- * Thin wrapper around @mlc-ai/web-llm: loads the library from CDN (cached by
- * the service worker after first successful load so it keeps working
- * offline), exposes model list access, engine creation with progress
- * reporting, and streaming chat completions.
+ * Thin wrapper around @mlc-ai/web-llm for the LOCAL, on-device engine. See
+ * providers.js for the separate (explicitly non-local) remote provider
+ * adapters used when the user configures their own API key.
  */
 
 let webllmModulePromise = null;
 
-// Try a few CDNs in order in case one is down, blocked, or mis-configured
-// for CORS in a given network. The service worker runtime-caches whichever
-// one succeeds, so subsequent (and offline) loads reuse that same source.
 const CDN_CANDIDATES = [
   "https://esm.run/@mlc-ai/web-llm",
   "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/+esm",
@@ -31,8 +27,7 @@ async function loadWebLLM() {
       }
     }
     throw new Error(
-      `Could not load the WebLLM library from any CDN (tried ${CDN_CANDIDATES.length}). ` +
-        `Check your internet connection for first-time setup. Last error: ${lastErr?.message}`
+      `Could not load the WebLLM library from any CDN (tried ${CDN_CANDIDATES.length}). Check your internet connection for first-time setup. Last error: ${lastErr?.message}`
     );
   })();
   return webllmModulePromise;
@@ -58,12 +53,6 @@ export class LLMEngine {
   async loadModel(modelId, onProgress) {
     if (!this.webllm) await this.init();
     if (this.engine && this.currentModelId === modelId) return this.engine;
-
-    // Recreate the engine per load: this guarantees the init progress
-    // callback (which differs per call site/UI instance) is always fresh,
-    // without depending on a mutator method that may not exist across
-    // WebLLM versions. Unload any previously loaded model first to free
-    // GPU memory.
     if (this.engine) {
       try {
         await this.engine.unload();
@@ -71,9 +60,7 @@ export class LLMEngine {
         /* ignore */
       }
     }
-    this.engine = new this.webllm.MLCEngine({
-      initProgressCallback: (p) => onProgress && onProgress(p),
-    });
+    this.engine = new this.webllm.MLCEngine({ initProgressCallback: (p) => onProgress && onProgress(p) });
     await this.engine.reload(modelId);
     this.currentModelId = modelId;
     return this.engine;
@@ -92,15 +79,27 @@ export class LLMEngine {
 
   /**
    * Streaming chat completion. `onToken` receives incremental text deltas.
-   * Returns the full final message text.
+   * `deepThinking=false` appends a lightweight system instruction requesting
+   * a direct, concise answer (best-effort prompt-level control — local
+   * WebLLM models don't expose a structured "no-think" API the way some
+   * remote providers, e.g. DeepSeek/Gemini, do).
    */
-  async chatStream(
-    messages,
-    { temperature = 0.8, topP = 0.95, frequencyPenalty = 0, presencePenalty = 0, maxTokens = 512, onToken } = {}
-  ) {
+  async chatStream(messages, { temperature = 0.8, topP = 0.95, frequencyPenalty = 0, presencePenalty = 0, maxTokens = 512, deepThinking = true, onToken } = {}) {
     if (!this.engine) throw new Error("No model loaded yet.");
+
+    let finalMessages = messages;
+    if (!deepThinking) {
+      const fastInstruction = "\n\nRespond directly and concisely. Skip step-by-step reasoning or <think> blocks — just give the final answer.";
+      finalMessages = messages.map((m, i) =>
+        m.role === "system" && i === 0 ? { ...m, content: m.content + fastInstruction } : m
+      );
+      if (!finalMessages.some((m) => m.role === "system")) {
+        finalMessages = [{ role: "system", content: fastInstruction.trim() }, ...finalMessages];
+      }
+    }
+
     const chunks = await this.engine.chat.completions.create({
-      messages,
+      messages: finalMessages,
       temperature,
       top_p: topP,
       frequency_penalty: frequencyPenalty,
